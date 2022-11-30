@@ -1,0 +1,5 @@
+{
+    "token": "<Discord Bot Token>",
+    "clientId": "<Discord Bot ID>",
+    "guildId": "<Discord guild ID (for dev)>"
+}
