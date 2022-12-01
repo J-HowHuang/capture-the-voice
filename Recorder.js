@@ -1,14 +1,15 @@
-const { joinVoiceChannel, EndBehaviorType, VoiceConnectionDestroyedState } = require('@discordjs/voice');
+const { joinVoiceChannel, EndBehaviorType, VoiceConnectionDestroyedState, AudioReceiveStream } = require('@discordjs/voice');
 const { EmbedBuilder, AttachmentBuilder, Guild, CommandInteraction, User, VoiceState } = require('discord.js');
-const { clientId } = require('./config.json')
+const { clientId, recording_time_limit } = require('./config.json')
 const fs = require('fs');
 const opus = require("@discordjs/opus")
+const CircularBuffer = require("circular-buffer");
 
 module.exports = class Recorder {
 
   /**
    * 
-   * @param {Snowflake} guildId 
+   * @param {Snowflake} guildId
    */
   constructor(guildId) {
     this.guildId = guildId
@@ -25,7 +26,11 @@ module.exports = class Recorder {
   _get_user(userId) {
     if (!this.users[userId]) {
       this.users[userId] = {
-        buffer: [],
+        buffer: new CircularBuffer(48000 * 4 * recording_time_limit),
+        /**
+         * 
+         * @type {AudioReceiveStream} stream
+         */
         stream: null, //null while not subscribing
       }
     }
@@ -50,9 +55,9 @@ module.exports = class Recorder {
    * @param {CommandInteraction} interaction 
    */
   async leave(interaction) {
-    if (this.connection !== undefined &&
-      this.connection?.state.status !== "destroyed") {
+    if (this.connection && this.connection.state.status !== "destroyed") {
       this.connection.destroy();
+      this.botOut();
       this.connection = undefined;
       await interaction.reply({ content: 'See ya!', ephemeral: true });
     } else {
@@ -68,7 +73,7 @@ module.exports = class Recorder {
    */
   async save(interaction, user) {
     let pathToFile = __dirname + `/recordings/${user.id}_${Date.now()}`;
-    let pcm_buffer = Buffer.concat(this._get_user(user.id).buffer);
+    let pcm_buffer = Buffer.concat(this._get_user(user.id).buffer.toarray());
     if (!pcm_buffer.length) {
       await interaction.reply(`${user.username} don't even speak...`)
       return
@@ -93,21 +98,23 @@ module.exports = class Recorder {
    * @param {VoiceState} newState 
    * @returns 
    */
-  voiceStateUpdate(oldState, newState) {
+  async voiceStateUpdate(oldState, newState) {
     // when you didn't use the "join" command 
     if (!this.connection)
       return;
 
-    // TODO: call bot in / bot out when newStateId = clientId
-    if (newState.id == clientId) {
-      if (oldState == null)
-        if (!newState.channelId)
-          //unsubscribe
-          return
+    if (newState.id == clientId) { // When the bot move
+      if (oldState.channelId) { // if the bot was in a channel
+        await this.botOut()
+      }      
+      if (newState.channelId) { // if the bot will be in a channel
+        this.botIn()
+      }
+      return
     }
 
+
     // user in / user out
-    newState.member.user.username
     const userId = newState.id
     const guildId = newState.guild.id
     const channelId = this.connection.joinConfig.channelId
@@ -144,9 +151,11 @@ module.exports = class Recorder {
     })
   }
 
-  botOut() {
-    // unsubscribe all users
-    this.unsubscribeUser()
+  async botOut() {
+    this.users.forEach(async (user) => {
+      if (user.stream)
+        await this.unsubscribeUser(user.id)
+    })
   }
 
   /**
@@ -154,6 +163,10 @@ module.exports = class Recorder {
    * @param {Snowflake} userId 
    */
   subscribeUser(userId) {
+    // do no't subscribe bot
+    if (userId == clientId)
+      return;
+
     // subscribe the user
     let user = this._get_user(userId)
     const receiver = this.connection.receiver
@@ -165,15 +178,24 @@ module.exports = class Recorder {
         }
       });
       stream.on('data', (data) => {
+        console.log("chunk size: ", Buffer.byteLength(JSON.stringify(this.encoder.decode(data))))
         this.users[userId].buffer.push(this.encoder.decode(data));
       });
       user.stream = stream;
     }
   }
 
-  unsubscribeUser(userId, guildId) {
+  /**
+   * @param {Snowflake} userId
+   */
+  async unsubscribeUser(userId) {
     // unsubscribe the user
     // destroy stream
+    let user = this._get_user(userId)
+    if (user.stream) {
+      await user.stream.destroy();
+      delete user.stream;
+    }
   }
 }
 

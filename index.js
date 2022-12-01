@@ -2,7 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const { token } = require('./config.json');
-const Recorders = require('./Recorders.js');
+const Recorder = require('./Recorder.js');
+const { get } = require('node:http');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 client.commands = new Collection();
@@ -21,7 +22,14 @@ for (const file of commandFiles) {
   }
 }
 
-const recorders = new Recorders();
+const recorders = {};
+
+function get_recorder(guildId) {
+  if (!recorders[guildId]) {
+    recorders[guildId] = new Recorder(guildId);
+  }
+  return recorders[guildId]
+}
 
 client.on('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
@@ -31,14 +39,14 @@ client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const command = interaction.client.commands.get(interaction.commandName);
-
+  
   if (!command) {
     console.error(`No command matching ${interaction.commandName} was found.`);
     return;
   }
 
   try {
-    const recorder = recorders.get_recorder(interaction.guildId);
+    const recorder = get_recorder(interaction.guildId);
     await command.execute(interaction, recorder);
   } catch (error) {
     console.error(error);
@@ -47,11 +55,9 @@ client.on("interactionCreate", async interaction => {
 });
 
 client.on("voiceStateUpdate", async (oldState, newState) => {
-  const old_recorder = recorders.get_recorder(oldState.guild.id)
-  const new_recorder = recorders.get_recorder(newState.guild.id)
-  new_recorder.voiceStateUpdate(oldState, newState)
-  if (oldState.guild.id != newState.guild.id)
-    old_recorder.voiceStateUpdate(oldState, newState)
+  // const recorder = get_recorder(newState.guild.id)
+  // recorder.voiceStateUpdate(oldState, newState)
+  console.log(1)
 })
 
 client.login(token);
