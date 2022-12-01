@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const { token } = require('./config.json');
-const Recorder = require('./Recorder.js');
+const Recorders = require('./Recorders.js');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 client.commands = new Collection();
@@ -21,7 +21,7 @@ for (const file of commandFiles) {
   }
 }
 
-const recorder = new Recorder();
+const recorders = new Recorders();
 
 client.on('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
@@ -38,6 +38,7 @@ client.on("interactionCreate", async interaction => {
   }
 
   try {
+    const recorder = recorders.get_recorder(interaction.guildId);
     await command.execute(interaction, recorder);
   } catch (error) {
     console.error(error);
@@ -46,7 +47,11 @@ client.on("interactionCreate", async interaction => {
 });
 
 client.on("voiceStateUpdate", async (oldState, newState) => {
-  recorder.voiceStateUpdate(oldState, newState)
+  const old_recorder = recorders.get_recorder(oldState.guild.id)
+  const new_recorder = recorders.get_recorder(newState.guild.id)
+  new_recorder.voiceStateUpdate(oldState, newState)
+  if (oldState.guild.id != newState.guild.id)
+    old_recorder.voiceStateUpdate(oldState, newState)
 })
 
 client.login(token);
