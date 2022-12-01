@@ -12,13 +12,13 @@ const rest = new REST({ version: '10' }).setToken(token);
       // delete all commands if no provided args
       if (args.length == 0) {
         console.log(`delete ${command.name}`);
-        const deleteUrl = `${Routes.applicationCommands(clientId)}/${command.id}`;
+        const deleteUrl = `${Routes.applicationGuildCommands(clientId)}/${command.id}`;
         await rest.delete(deleteUrl);
       }
       // delete commands in args
       else if (command.name in args) {
         console.log(`delete ${command.name}`);
-        const deleteUrl = `${Routes.applicationCommands(clientId)}/${command.id}`;
+        const deleteUrl = `${Routes.applicationGuildCommands(clientId)}/${command.id}`;
         await rest.delete(deleteUrl);
       }
     }
