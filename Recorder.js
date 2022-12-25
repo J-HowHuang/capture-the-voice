@@ -1,12 +1,15 @@
 const { joinVoiceChannel, EndBehaviorType, VoiceConnectionDestroyedState, AudioReceiveStream } = require('@discordjs/voice');
 const { EmbedBuilder, AttachmentBuilder, Guild, CommandInteraction, User, VoiceState } = require('discord.js');
 const { clientId, recording_time_limit } = require('./config.json')
+const AudioMixer = require('audio-mixer');
+const {Writable} = require("stream")
+
 const fs = require('fs');
 const opus = require("@discordjs/opus")
 const CircularBuffer = require("circular-buffer");
 
 const SAMPLE_RATE = 48000
-const BIT_DEPTH = 2
+const BYTE_DEPTH = 2
 const CHANNEL_COUNT = 2
 const CHUNK_SIZE = 3840
 
@@ -17,10 +20,25 @@ module.exports = class Recorder {
    * @param {Snowflake} guildId
    */
   constructor(guildId) {
+    var self = this;
     this.guildId = guildId
     this.connection = undefined;
     this.users = {};
-    this.encoder = new opus.OpusEncoder(48000, 2);
+    this.encoder = new opus.OpusEncoder(SAMPLE_RATE, CHANNEL_COUNT);
+    this.mixer = new AudioMixer.Mixer({
+      channels: CHANNEL_COUNT,
+      bitDepth: BYTE_DEPTH * 8,
+      sampleRate: SAMPLE_RATE,
+      clearInterval: 250,
+    });
+    this.buffer = new CircularBuffer(SAMPLE_RATE * BYTE_DEPTH * CHANNEL_COUNT * recording_time_limit / CHUNK_SIZE);
+    let writableStream = new Writable({
+      write(chunk, encoding, done){
+        self.buffer.push(chunk)
+        done()
+      }
+    });
+    this.mixer.pipe(writableStream);
   }
 
   /**
@@ -31,7 +49,12 @@ module.exports = class Recorder {
   _get_user(userId) {
     if (!this.users[userId]) {
       this.users[userId] = {
-        buffer: new CircularBuffer(SAMPLE_RATE * BIT_DEPTH * CHANNEL_COUNT * recording_time_limit / CHUNK_SIZE),
+        mixerInput: this.mixer.input({
+          channels: 2,
+          bitDepth: BYTE_DEPTH * 8,
+          volume: 75,
+          sampleRate: 48000,
+        }),
         /**
          * 
          * @type {AudioReceiveStream} stream
@@ -78,19 +101,18 @@ module.exports = class Recorder {
    */
   async save(interaction, user) {
     let pathToFile = __dirname + `/recordings/${user.id}_${Date.now()}`;
-    let now = Date.now()
-    let buffers = this._get_user(user.id).buffer.toarray().filter((chunk) => now - chunk.startTime < recording_time_limit * 1000)
-    let pcm_buffer = Buffer.alloc(SAMPLE_RATE * BIT_DEPTH * CHANNEL_COUNT * recording_time_limit, 0)
-    // if (!pcm_buffer.length) {
-    //   await interaction.reply(`${user.username} don't even speak...`)
-    //   return
+    // let now = Date.now()
+    // let buffers = this._get_user(user.id).buffer.toarray().filter((chunk) => now - chunk.startTime < recording_time_limit * 1000)
+    // let pcm_buffer = Buffer.alloc(SAMPLE_RATE * BYTE_DEPTH * CHANNEL_COUNT * recording_time_limit, 0)
+
+    // for (let i = 0; i < buffers.length; i++) {
+    //   let position = Math.round(SAMPLE_RATE * BYTE_DEPTH * CHANNEL_COUNT * (recording_time_limit - (now - buffers[i].startTime) / 1000))
+    //   position = Math.round(position / 4) * 4
+    //   // console.log("position:", position)
+    //   pcm_buffer.fill(Buffer.from(buffers[i].data), position, position + CHUNK_SIZE > pcm_buffer.length - 1 ? pcm_buffer.length - 1 : position + CHUNK_SIZE);
     // }
-    for(let i = 0; i < buffers.length; i++) {
-      let position = Math.round(SAMPLE_RATE * BIT_DEPTH * CHANNEL_COUNT * (recording_time_limit - (now - buffers[i].startTime) / 1000))
-      position = Math.round(position / 4) * 4
-      // console.log("position:", position)
-      pcm_buffer.fill(Buffer.from(buffers[i].data), position, position + CHUNK_SIZE > pcm_buffer.length - 1?pcm_buffer.length - 1:position + CHUNK_SIZE);
-    }
+    let pcm_buffer = Buffer.concat(this.buffer.toarray());
+    console.log("pcm buffer length: ",pcm_buffer.length)
     fs.writeFile(`${pathToFile}.pcm`, pcm_buffer, () => { })
 
     convert_pcm_to_mp3(`${pathToFile}.pcm`, `${pathToFile}.mp3`, async (err, stdout, stderr) => {
@@ -99,7 +121,7 @@ module.exports = class Recorder {
           .setColor(0x0099FF)
           .setTitle('HAHA! Your voice cRaCKeD!🤙🤙🤙')
         const file = new AttachmentBuilder(`${pathToFile}.mp3`);
-        interaction.channel.send({ embeds: [embed], files: [file] });
+        interaction.reply({ embeds: [embed], files: [file] });
       } else {
         await interaction.reply({ content: `Error while saving!!, Reason: ${err}` });
       }
@@ -122,7 +144,7 @@ module.exports = class Recorder {
         await this.botOut()
       }
       if (newState.channelId) { // if the bot will be in a channel
-        this.botIn()
+        this.botIn(newState.channelId, newState.guild)
       }
       return
     }
@@ -192,11 +214,8 @@ module.exports = class Recorder {
         }
       });
       stream.on('data', (data) => {
-        let chunk = {
-          "data": this.encoder.decode(data),
-          "startTime": Date.now()
-        }
-        this.users[userId].buffer.push(chunk);
+        let decoded = this.encoder.decode(data)
+        user.mixerInput.write(decoded)
       });
       user.stream = stream;
     }

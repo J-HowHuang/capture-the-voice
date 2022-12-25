@@ -55,8 +55,8 @@ client.on("interactionCreate", async interaction => {
 });
 
 client.on("voiceStateUpdate", async (oldState, newState) => {
-  const recorder = get_recorder(newState.guild.id)
-  recorder.voiceStateUpdate(oldState, newState)
+  // const recorder = get_recorder(newState.guild.id)
+  // recorder.voiceStateUpdate(oldState, newState)
   // console.log(1)
 })
 
