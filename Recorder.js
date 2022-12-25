@@ -5,6 +5,11 @@ const fs = require('fs');
 const opus = require("@discordjs/opus")
 const CircularBuffer = require("circular-buffer");
 
+const SAMPLE_RATE = 48000
+const BIT_DEPTH = 2
+const CHANNEL_COUNT = 2
+const CHUNK_SIZE = 3840
+
 module.exports = class Recorder {
 
   /**
@@ -26,7 +31,7 @@ module.exports = class Recorder {
   _get_user(userId) {
     if (!this.users[userId]) {
       this.users[userId] = {
-        buffer: new CircularBuffer(48000 * 4 * recording_time_limit),
+        buffer: new CircularBuffer(SAMPLE_RATE * BIT_DEPTH * CHANNEL_COUNT * recording_time_limit / CHUNK_SIZE),
         /**
          * 
          * @type {AudioReceiveStream} stream
@@ -73,12 +78,21 @@ module.exports = class Recorder {
    */
   async save(interaction, user) {
     let pathToFile = __dirname + `/recordings/${user.id}_${Date.now()}`;
-    let pcm_buffer = Buffer.concat(this._get_user(user.id).buffer.toarray());
-    if (!pcm_buffer.length) {
-      await interaction.reply(`${user.username} don't even speak...`)
-      return
+    let now = Date.now()
+    let buffers = this._get_user(user.id).buffer.toarray().filter((chunk) => now - chunk.startTime < recording_time_limit * 1000)
+    let pcm_buffer = Buffer.alloc(SAMPLE_RATE * BIT_DEPTH * CHANNEL_COUNT * recording_time_limit, 0)
+    // if (!pcm_buffer.length) {
+    //   await interaction.reply(`${user.username} don't even speak...`)
+    //   return
+    // }
+    for(let i = 0; i < buffers.length; i++) {
+      let position = Math.round(SAMPLE_RATE * BIT_DEPTH * CHANNEL_COUNT * (recording_time_limit - (now - buffers[i].startTime) / 1000))
+      position = Math.round(position / 4) * 4
+      // console.log("position:", position)
+      pcm_buffer.fill(Buffer.from(buffers[i].data), position, position + CHUNK_SIZE > pcm_buffer.length - 1?pcm_buffer.length - 1:position + CHUNK_SIZE);
     }
     fs.writeFile(`${pathToFile}.pcm`, pcm_buffer, () => { })
+
     convert_pcm_to_mp3(`${pathToFile}.pcm`, `${pathToFile}.mp3`, async (err, stdout, stderr) => {
       if (!err) {
         const embed = new EmbedBuilder()
@@ -106,7 +120,7 @@ module.exports = class Recorder {
     if (newState.id == clientId) { // When the bot move
       if (oldState.channelId) { // if the bot was in a channel
         await this.botOut()
-      }      
+      }
       if (newState.channelId) { // if the bot will be in a channel
         this.botIn()
       }
@@ -178,8 +192,11 @@ module.exports = class Recorder {
         }
       });
       stream.on('data', (data) => {
-        console.log("chunk size: ", Buffer.byteLength(JSON.stringify(this.encoder.decode(data))))
-        this.users[userId].buffer.push(this.encoder.decode(data));
+        let chunk = {
+          "data": this.encoder.decode(data),
+          "startTime": Date.now()
+        }
+        this.users[userId].buffer.push(chunk);
       });
       user.stream = stream;
     }
